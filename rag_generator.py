@@ -1,34 +1,26 @@
 from transformers import pipeline
+from sentence_transformers import SentenceTransformer, util
 import re
+import torch
 
 # =====================
-# Load model
+# Load models
 # =====================
+# FLAN-T5 base (lebih besar dari small, tetap bisa pakai CPU)
 generator = pipeline(
     "text2text-generation",
-    model="google/flan-t5-small",
-    device=-1
+    model="google/flan-t5-base",
+    device=-1  # -1 = CPU
 )
 
-# =====================
-# Constants
-# =====================
-STOPWORDS = {
-    "what", "is", "are", "the", "of", "and", "to", "in", "on", "for", "with"
-}
-
-KEYWORD_MAP = {
-    "effects": {"effects", "impact", "issues", "problems", "risks"},
-    "health": {"health", "wellbeing", "well-being"},
-    "wellness": {"wellness", "health", "lifestyle"},
-    "sleep": {"sleep", "sleeping"},
-    "tv": {"tv", "television"},
-    "mental": {"mental", "psychological"}
-}
+# Embedding model ringan & cepat
+embed_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # =====================
 # Utilities
 # =====================
+STOPWORDS = {"what", "is", "are", "the", "of", "and", "to", "in", "on", "for", "with"}
+
 def clean_text(text):
     text = text.lower()
     text = re.sub(r"http\S+", " ", text)
@@ -41,84 +33,54 @@ def extract_sentences(text, min_len=8):
     parts = re.split(r"[.!?]", text)
     return [p.strip() for p in parts if len(p.strip()) >= min_len]
 
-def tokenize(text):
-    return [
-        w for w in text.split()
-        if w not in STOPWORDS and len(w) > 2
-    ]
-
-def expand_query_terms(query):
-    words = re.sub(r"[^a-z0-9\s]", "", query.lower()).split()
-    expanded = set()
-
-    for w in words:
-        if w in STOPWORDS:
-            continue
-        if w in KEYWORD_MAP:
-            expanded |= KEYWORD_MAP[w]
-        else:
-            expanded.add(w)
-
-    return expanded
-
 # =====================
-# Intent Detection
-# =====================
-def is_topic_question(query):
-    q = query.lower()
-    return "topic" in q or "topics" in q
-
-# =====================
-# Document Filtering
+# Filter Health Docs
 # =====================
 def filter_health_docs(docs):
-    allowed = {"WELLNESS", "WOMEN"}
-    return [d for d in docs if d.get("category") in allowed]
+    health_categories = {"WELLNESS", "HEALTH", "WOMEN"}
+    return [d for d in docs if d.get("category", "").upper() in health_categories]
 
 # =====================
-# Topic Extraction (TITLE-BASED)
+# Semantic Retrieval
 # =====================
-def extract_topics_from_titles(docs):
-    topics = set()
+def get_relevant_sentences_semantic(query, docs, top_k=10, threshold=0.5):
+    """
+    Ambil kalimat paling relevan dengan query menggunakan embeddings.
+    """
+    query_emb = embed_model.encode(query, convert_to_tensor=True)
+    all_sentences = []
 
     for d in docs:
-        title = d.get("title", "").lower()
-        title = re.sub(r"[^a-z0-9\s]", " ", title)
+        text = d.get("text","")
+        sentences = extract_sentences(text)
+        all_sentences.extend(sentences)
 
-        if "mental" in title and "health" in title:
-            if "athlete" in title:
-                topics.add("mental health of athletes")
-            else:
-                topics.add("mental health")
+    if not all_sentences:
+        return []
 
-        if "women" in title and "health" in title:
-            topics.add("women’s health")
+    sentence_embs = embed_model.encode(all_sentences, convert_to_tensor=True)
+    sims = util.cos_sim(query_emb, sentence_embs)[0]
+    sims = sims.cpu().numpy()
 
-    return topics
+    # Pilih kalimat di atas threshold
+    top_idx = [i for i, sim in enumerate(sims) if sim > threshold]
+    if not top_idx:  # fallback jika tidak ada yang > threshold
+        top_idx = sims.argsort()[::-1][:top_k]
 
+    top_sentences = [all_sentences[i] for i in top_idx]
+    return top_sentences
 
 # =====================
-# Sentence Retrieval 
+# Fallback Keyword Search
 # =====================
-def get_relevant_sentences(query, docs, max_per_doc=2):
-    q_words = expand_query_terms(query)
+def get_relevant_sentences_keyword(query, docs):
+    keywords = set(clean_text(query).split()) - STOPWORDS
     selected = []
-
     for d in docs:
-        sentences = extract_sentences(d.get("text", ""))
-        scored = []
-
-        for s in sentences:
-            s_tokens = set(tokenize(s))
-            overlap = q_words & s_tokens
-            score = len(overlap)
-
-            if score >= 1:
-                scored.append((score, s))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        selected.extend([s for _, s in scored[:max_per_doc]])
-
+        for s in extract_sentences(d.get("text","")):
+            s_tokens = set(clean_text(s).split())
+            if s_tokens & keywords:
+                selected.append(s)
     return selected
 
 # =====================
@@ -138,65 +100,42 @@ def build_context(sentences, max_sentences=6):
     return "\n".join(f"- {s}" for s in context)
 
 # =====================
-# Generation
+# Generate Health Answer
 # =====================
-def generate_answer(query, docs, max_length=160):
+def generate_health_answer(query, docs, max_length=300, top_k=10, threshold=0.5):
+    """
+    Query terkait kesehatan -> jawaban menyimpulkan efek kesehatan
+    """
+    # Filter dokumen kesehatan
+    health_docs = filter_health_docs(docs)
+    if not health_docs:
+        return "Informasi kesehatan tidak ditemukan di dataset."
 
-    if not docs:
+    # Semantic search
+    relevant_sentences = get_relevant_sentences_semantic(query, health_docs, top_k=top_k, threshold=threshold)
+
+    # Fallback keyword search jika tidak ada semantic match
+    if not relevant_sentences:
+        relevant_sentences = get_relevant_sentences_keyword(query, health_docs)
+
+    if not relevant_sentences:
         return "Informasi tidak ditemukan."
 
-    # =====================
-    # HARD TOPIC EXTRACTION (ANTI-GAGAL)
-    # =====================
-    topics = set()
-
-    for d in docs:
-        text = clean_text(d.get("text", ""))
-
-        if not text:
-            continue
-
-        if "mental" in text and "health" in text:
-            topics.add("mental health")
-
-        if "athlete" in text and "health" in text:
-            topics.add("mental health of athletes")
-
-        if "women" in text and "health" in text:
-            topics.add("women’s health")
-
-        if "sleep" in text:
-            topics.add("sleep health")
-
-        if "tv" in text or "television" in text:
-            topics.add("health effects of television")
-
-    if topics:
-        return (
-            "The articles discuss the following health and wellness topics: "
-            + ", ".join(sorted(topics)) + "."
-        )
-
-    # ==============
-    # FALLBACK QA 
-    # ==============
-    relevant = get_relevant_sentences(query, docs)
-    if not relevant:
-        return "Informasi tidak ditemukan."
-
-    context = build_context(relevant)
+    context = build_context(relevant_sentences)
 
     prompt = f"""
-Answer the question using only the information below.
+    Read the following documents and answer the question below.
+    Focus ONLY on the specific health effect mentioned.
+    Do not include unrelated information.
+    Write a concise answer in complete sentences.
 
-DOCUMENTS:
-{context}
+    DOCUMENTS:
+    {context}
 
-QUESTION:
-{query}
+    QUESTION:
+    {query}
 
-ANSWER:
-"""
-
+    ANSWER:
+    """
     out = generator(prompt, max_length=max_length, do_sample=False)
     return out[0]["generated_text"].strip()
