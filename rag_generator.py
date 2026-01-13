@@ -171,7 +171,6 @@ def generate_answer(query, docs, max_length=160):
         if "tv" in text or "television" in text:
             topics.add("health effects of television")
 
-    # 🔥 JIKA ADA TOPIK → KEMBALIKAN LANGSUNG
     if topics:
         return (
             "The articles discuss the following health and wellness topics: "
