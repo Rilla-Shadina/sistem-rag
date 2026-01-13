@@ -4,11 +4,15 @@ Proyek ini membangun sistem Retrieval-Augmented Generation (RAG) yang mampu menj
 pertanyaan pengguna berdasarkan kumpulan artikel berita. Sistem dirancang agar jawaban 
 yang dihasilkan hanya bersumber dari dokumen relevan
 
-**Dataset:** News Category dataset (Kaggle)
+**Dataset:**
+- News Category dataset (Kaggle)
+- Berjumlah ±100.000 artikel
+- Fokus domain: Artikel Kesehatan
+- Berbahasa Inggris
 
 **Fitur Utama:**
-- Pencarian dokumen menggunakan algoritma BM25
-- Ekspansi kata kunci dan pemrosesan query
+- Pencarian dokumen menggunakan semantic search berbasis embedding
+- Ekspansi kata kunci dan pemrosesan query kesehatan
 - Ekstraksi konteks berbasis kalimat
 - Jawaban (generation) berbasis instruksi menggunakan FLAN-T5
 - Mekanisme fallback jika jawaban tidak ditemukan
@@ -23,5 +27,5 @@ Python, HuggingFace Transformers, FLAN-T5, BM25 (rank-bm25), Pandas, Regular Exp
 - Perancangan Sistem Modular
 
 **Hasil Proyek:**
-Sistem dapat mengidentifikasi topik dalam dataset, seperti kesehatan mental atlet dan 
-kesehatan perempuan, serta menghasilkan jawaban yang relevan.
+Sistem dapat mengidentifikasi topik dari dataset berita kesehatan dan menghasilkan jawaban yang relevan 
+dan ringkas berdasarkan informasi yang ada di dokumen.
