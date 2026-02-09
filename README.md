@@ -1,8 +1,8 @@
 **Sistem Question Answering Retrieval-Augmented Generation (RAG)**
 
 Proyek ini membangun sistem Retrieval-Augmented Generation (RAG) yang mampu menjawab 
-pertanyaan pengguna berdasarkan kumpulan artikel berita. Sistem dirancang agar jawaban 
-yang dihasilkan hanya bersumber dari dokumen relevan
+pertanyaan pengguna terkait dengan topik kesehatan berdasarkan kumpulan artikel berita. Sistem dirancang agar jawaban 
+yang dihasilkan hanya bersumber dari dokumen relevan.
 
 **Dataset:**
 - News Category dataset (Kaggle)
